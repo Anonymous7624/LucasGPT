@@ -3,16 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
 function AdminLogin() {
-  const [username, setUsername] = useState('');
+  const [usernameOrEmail, setUsernameOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const token = localStorage.getItem('adminToken');
-    if (token) {
-      navigate('/admin/dashboard');
+    const token = localStorage.getItem('authToken');
+    const userData = localStorage.getItem('user');
+    if (token && userData) {
+      const user = JSON.parse(userData);
+      if (user.role === 'admin') {
+        navigate('/admin/dashboard');
+      }
     }
   }, [navigate]);
 
@@ -22,8 +26,16 @@ function AdminLogin() {
     setLoading(true);
 
     try {
-      const { token } = await api.adminLogin(username, password);
-      localStorage.setItem('adminToken', token);
+      const { token, user } = await api.login(usernameOrEmail, password);
+      
+      if (user.role !== 'admin') {
+        setError('Access denied. Admin privileges required.');
+        setLoading(false);
+        return;
+      }
+
+      localStorage.setItem('authToken', token);
+      localStorage.setItem('user', JSON.stringify(user));
       navigate('/admin/dashboard');
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -33,10 +45,10 @@ function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-chat-bg flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-chat-input rounded-lg p-8 shadow-xl">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-gray-800 rounded-lg p-8 shadow-xl">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">Admin Login</h1>
+          <h1 className="text-3xl font-bold mb-2 text-white">Admin Login</h1>
           <p className="text-gray-400">LucasGPT Dashboard</p>
         </div>
 
@@ -49,14 +61,14 @@ function AdminLogin() {
 
           <div>
             <label className="block text-sm text-gray-400 mb-2">
-              Username
+              Username or Email
             </label>
             <input
               type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              value={usernameOrEmail}
+              onChange={(e) => setUsernameOrEmail(e.target.value)}
               required
-              className="w-full bg-chat-bg text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -69,7 +81,7 @@ function AdminLogin() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full bg-chat-bg text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -96,3 +108,4 @@ function AdminLogin() {
 }
 
 export default AdminLogin;
+

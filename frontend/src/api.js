@@ -5,18 +5,31 @@ async function fetchAPI(endpoint, options = {}) {
   
   const config = {
     headers: {
-      'Content-Type': 'application/json',
       ...options.headers,
     },
     ...options,
   };
 
-  const token = localStorage.getItem('adminToken');
+  if (!options.isFormData) {
+    config.headers['Content-Type'] = 'application/json';
+  }
+
+  const token = localStorage.getItem('authToken');
   if (token && !options.skipAuth) {
     config.headers['Authorization'] = `Bearer ${token}`;
   }
 
+  const guestSessionId = sessionStorage.getItem('guestSessionId');
+  if (guestSessionId && !token) {
+    config.headers['X-Guest-Session-Id'] = guestSessionId;
+  }
+
   const response = await fetch(url, config);
+  
+  if (options.isStream) {
+    return response;
+  }
+
   const data = await response.json();
 
   if (!response.ok) {
@@ -27,53 +40,135 @@ async function fetchAPI(endpoint, options = {}) {
 }
 
 export const api = {
-  createConversation: async (displayName) => {
-    return fetchAPI('/api/conversations', {
+  signup: async (username, email, password) => {
+    return fetchAPI('/api/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ displayName }),
+      body: JSON.stringify({ username, email, password }),
       skipAuth: true,
     });
+  },
+
+  login: async (usernameOrEmail, password) => {
+    return fetchAPI('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ usernameOrEmail, password }),
+      skipAuth: true,
+    });
+  },
+
+  getMe: async () => {
+    return fetchAPI('/api/auth/me');
+  },
+
+  startGuestSession: async () => {
+    return fetchAPI('/api/guest/start', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      skipAuth: true,
+    });
+  },
+
+  sendHeartbeat: async (guestSessionId) => {
+    return fetchAPI(`/api/guest/${guestSessionId}/heartbeat`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      skipAuth: true,
+    });
+  },
+
+  endGuestSession: async (guestSessionId) => {
+    return fetchAPI(`/api/guest/${guestSessionId}/end`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      skipAuth: true,
+    });
+  },
+
+  createConversation: async () => {
+    return fetchAPI('/api/conversations', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  getUserConversations: async () => {
+    return fetchAPI('/api/conversations');
   },
 
   getMessages: async (conversationId) => {
+    return fetchAPI(`/api/conversations/${conversationId}/messages`);
+  },
+
+  sendMessage: async (conversationId, content, files = []) => {
+    const formData = new FormData();
+    formData.append('content', content);
+    
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
+
     return fetchAPI(`/api/conversations/${conversationId}/messages`, {
-      skipAuth: true,
-    });
-  },
-
-  sendMessage: async (conversationId, content) => {
-    return fetchAPI(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
-      skipAuth: true,
+      body: formData,
+      isFormData: true,
     });
   },
 
-  adminLogin: async (username, password) => {
-    return fetchAPI('/api/auth/login', {
+  getFileViewUrl: (fileId) => {
+    const token = localStorage.getItem('authToken');
+    const guestSessionId = sessionStorage.getItem('guestSessionId');
+    
+    let url = `${API_BASE_URL}/api/files/${fileId}/view`;
+    
+    if (token) {
+      url += `?auth=${encodeURIComponent(token)}`;
+    } else if (guestSessionId) {
+      url += `?guest=${encodeURIComponent(guestSessionId)}`;
+    }
+    
+    return url;
+  },
+
+  getFileDownloadUrl: (fileId) => {
+    const token = localStorage.getItem('authToken');
+    const guestSessionId = sessionStorage.getItem('guestSessionId');
+    
+    let url = `${API_BASE_URL}/api/files/${fileId}/download`;
+    
+    if (token) {
+      url += `?auth=${encodeURIComponent(token)}`;
+    } else if (guestSessionId) {
+      url += `?guest=${encodeURIComponent(guestSessionId)}`;
+    }
+    
+    return url;
+  },
+
+  getAdminConversations: async () => {
+    return fetchAPI('/api/admin/conversations');
+  },
+
+  getAdminConversation: async (conversationId) => {
+    return fetchAPI(`/api/admin/conversations/${conversationId}`);
+  },
+
+  sendAdminReply: async (conversationId, content, files = []) => {
+    const formData = new FormData();
+    formData.append('content', content);
+    
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
+
+    return fetchAPI(`/api/admin/conversations/${conversationId}/reply`, {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
-      skipAuth: true,
+      body: formData,
+      isFormData: true,
     });
   },
 
-  getConversations: async () => {
-    return fetchAPI('/api/conversations/admin/conversations');
-  },
-
-  getConversation: async (conversationId) => {
-    return fetchAPI(`/api/conversations/admin/conversations/${conversationId}`);
-  },
-
-  sendReply: async (conversationId, content) => {
-    return fetchAPI(`/api/conversations/admin/conversations/${conversationId}/reply`, {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-    });
-  },
-
-  updateStatus: async (conversationId, status) => {
-    return fetchAPI(`/api/conversations/admin/conversations/${conversationId}/status`, {
+  updateConversationStatus: async (conversationId, status) => {
+    return fetchAPI(`/api/admin/conversations/${conversationId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     });
@@ -81,3 +176,4 @@ export const api = {
 };
 
 export default api;
+
