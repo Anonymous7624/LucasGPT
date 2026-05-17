@@ -1,39 +1,55 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const mongoose = require('mongoose');
+const { MongoClient, GridFSBucket } = require('mongodb');
 
-const db = new Database(path.join(__dirname, 'database.sqlite'));
+let gfsBucket;
+let mongoClient;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    display_name TEXT,
-    status TEXT DEFAULT 'open',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-`);
+async function connectDB() {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI is not defined in environment variables');
+    }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    sender TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-  )
-`);
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('✓ MongoDB connected via Mongoose');
 
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_messages_conversation 
-  ON messages(conversation_id, created_at)
-`);
+    mongoClient = new MongoClient(process.env.MONGODB_URI);
+    await mongoClient.connect();
+    
+    const db = mongoClient.db();
+    gfsBucket = new GridFSBucket(db, {
+      bucketName: 'uploads'
+    });
+    
+    console.log('✓ GridFS bucket initialized');
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    process.exit(1);
+  }
+}
 
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_conversations_updated 
-  ON conversations(updated_at DESC)
-`);
+function getGridFSBucket() {
+  if (!gfsBucket) {
+    throw new Error('GridFS bucket not initialized. Call connectDB() first.');
+  }
+  return gfsBucket;
+}
 
-console.log('Database initialized successfully');
+async function closeDB() {
+  try {
+    await mongoose.connection.close();
+    if (mongoClient) {
+      await mongoClient.close();
+    }
+    console.log('MongoDB connections closed');
+  } catch (error) {
+    console.error('Error closing MongoDB connections:', error);
+  }
+}
 
-module.exports = db;
+module.exports = {
+  connectDB,
+  getGridFSBucket,
+  closeDB
+};
+

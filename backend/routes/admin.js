@@ -1,21 +1,14 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const path = require('path');
+const { Readable } = require('stream');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const File = require('../models/File');
-const { authenticateToken, validateConversationAccess } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { getGridFSBucket } = require('../db');
-const { Readable } = require('stream');
 
 const router = express.Router();
-
-const publicMessageLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
-  message: { error: 'Too many messages. Please wait a moment.' }
-});
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -70,96 +63,82 @@ async function uploadFileToGridFS(fileBuffer, filename, mimetype) {
   });
 }
 
-router.post('/', authenticateToken, async (req, res) => {
+router.get('/conversations', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const conversation = new Conversation({
-      owner_user_id: req.user._id,
-      is_guest: false,
-      status: 'open'
-    });
+    const conversations = await Conversation.find()
+      .populate('owner_user_id', 'username email')
+      .sort({ updated_at: -1 });
 
-    await conversation.save();
-
-    res.json({ conversationId: conversation._id });
-  } catch (error) {
-    console.error('Error creating conversation:', error);
-    res.status(500).json({ error: 'Failed to create conversation' });
-  }
-});
-
-router.get('/', authenticateToken, async (req, res) => {
-  try {
-    const conversations = await Conversation.find({
-      owner_user_id: req.user._id
-    }).sort({ updated_at: -1 });
-
-    const conversationsWithMessages = await Promise.all(
+    const conversationsWithDetails = await Promise.all(
       conversations.map(async (conv) => {
         const lastMessage = await Message.findOne({ conversation_id: conv._id })
           .sort({ created_at: -1 });
         
         const fileCount = await File.countDocuments({ conversation_id: conv._id });
+        
+        const userMessageCount = await Message.countDocuments({
+          conversation_id: conv._id,
+          sender: 'user'
+        });
+
+        const lucasMessageCount = await Message.countDocuments({
+          conversation_id: conv._id,
+          sender: 'lucas'
+        });
 
         return {
           ...conv.toObject(),
           last_message: lastMessage ? lastMessage.content : null,
-          file_count: fileCount
+          file_count: fileCount,
+          user_message_count: userMessageCount,
+          lucas_message_count: lucasMessageCount
         };
       })
     );
 
-    res.json({ conversations: conversationsWithMessages });
+    res.json({ conversations: conversationsWithDetails });
   } catch (error) {
-    console.error('Error fetching conversations:', error);
+    console.error('Error fetching admin conversations:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
   }
 });
 
-router.get('/:conversationId/messages', validateConversationAccess, async (req, res) => {
+router.get('/conversations/:conversationId', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const messages = await Message.find({
-      conversation_id: req.conversation._id
-    })
+    const { conversationId } = req.params;
+
+    const conversation = await Conversation.findById(conversationId)
+      .populate('owner_user_id', 'username email');
+    
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const messages = await Message.find({ conversation_id: conversationId })
       .sort({ created_at: 1 })
       .populate('file_ids');
 
-    res.json({
-      conversation: req.conversation,
-      messages
-    });
+    res.json({ conversation, messages });
   } catch (error) {
-    console.error('Error fetching messages:', error);
-    res.status(500).json({ error: 'Failed to fetch messages' });
+    console.error('Error fetching admin conversation:', error);
+    res.status(500).json({ error: 'Failed to fetch conversation' });
   }
 });
 
-router.post('/:conversationId/messages', publicMessageLimiter, upload.array('files', 20), async (req, res) => {
+router.post('/conversations/:conversationId/reply', authenticateToken, requireAdmin, upload.array('files', 20), async (req, res) => {
   try {
     const { conversationId } = req.params;
     const { content } = req.body;
     const files = req.files || [];
 
     if (!content || content.trim().length === 0) {
-      return res.status(400).json({ error: 'Message content required' });
-    }
-
-    if (content.length > 50000) {
-      return res.status(400).json({ error: 'Message too long (max 50000 characters)' });
+      return res.status(400).json({ error: 'Reply content required' });
     }
 
     const conversation = await Conversation.findById(conversationId);
     
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    const guestSessionId = req.headers['x-guest-session-id'];
-    const isAuthorized = 
-      (conversation.is_guest && conversation.guest_session_id === guestSessionId) ||
-      (req.user && conversation.owner_user_id && conversation.owner_user_id.toString() === req.user._id.toString());
-
-    if (!isAuthorized) {
-      return res.status(403).json({ error: 'Access denied' });
     }
 
     if (files.length > 0) {
@@ -184,7 +163,7 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
         original_name: sanitizedName,
         mime_type: file.mimetype,
         size_bytes: file.size,
-        uploaded_by: conversation.is_guest ? 'guest' : 'user'
+        uploaded_by: 'admin'
       });
 
       await fileDoc.save();
@@ -193,31 +172,53 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
 
     const message = new Message({
       conversation_id: conversation._id,
-      sender: 'user',
+      sender: 'lucas',
       content: content.trim(),
       file_ids: fileIds
     });
 
     await message.save();
 
-    conversation.status = 'open';
+    conversation.status = 'answered';
     conversation.updated_at = new Date();
-    if (conversation.is_guest) {
-      conversation.last_heartbeat_at = new Date();
-    }
     await conversation.save();
 
     const populatedMessage = await Message.findById(message._id).populate('file_ids');
 
     res.json({ message: populatedMessage });
   } catch (error) {
-    console.error('Error posting message:', error);
+    console.error('Error posting admin reply:', error);
     if (error.message.includes('Invalid file type')) {
       return res.status(400).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to post message' });
+    res.status(500).json({ error: 'Failed to post reply' });
+  }
+});
+
+router.patch('/conversations/:conversationId/status', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { status } = req.body;
+
+    if (!['open', 'answered', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be open, answered, or closed' });
+    }
+
+    const conversation = await Conversation.findById(conversationId);
+    
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    conversation.status = status;
+    conversation.updated_at = new Date();
+    await conversation.save();
+
+    res.json({ success: true, status });
+  } catch (error) {
+    console.error('Error updating status:', error);
+    res.status(500).json({ error: 'Failed to update status' });
   }
 });
 
 module.exports = router;
-
