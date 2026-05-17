@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 import api from '../api';
 
-function ChatWindow({ conversationId, isGuest, user, onLogout }) {
+function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClosed }) {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [conversation, setConversation] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -27,8 +28,20 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
     try {
       const data = await api.getMessages(conversationId);
       setMessages(data.messages);
+      setConversation(data.conversation);
+      
+      if (data.conversation.status === 'closed') {
+        if (onConversationClosed) {
+          onConversationClosed();
+        }
+      }
     } catch (error) {
       console.error('Failed to load messages:', error);
+      if (error.message.includes('closed') || error.message.includes('Access denied')) {
+        if (onConversationClosed) {
+          onConversationClosed();
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -50,6 +63,11 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
   const handleSend = async () => {
     if (!inputValue.trim() && selectedFiles.length === 0) return;
 
+    if (conversation?.status === 'closed') {
+      alert('This conversation is closed. Please start a new conversation.');
+      return;
+    }
+
     const messageContent = inputValue.trim();
     const filesToSend = [...selectedFiles];
     
@@ -62,8 +80,14 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
       await loadMessages();
     } catch (error) {
       alert('Failed to send message: ' + error.message);
-      setInputValue(messageContent);
-      setSelectedFiles(filesToSend);
+      if (error.message.includes('closed')) {
+        if (onConversationClosed) {
+          onConversationClosed();
+        }
+      } else {
+        setInputValue(messageContent);
+        setSelectedFiles(filesToSend);
+      }
     } finally {
       setSending(false);
     }
@@ -94,6 +118,14 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
         )}
       </header>
 
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+        <div className="max-w-4xl mx-auto">
+          <p className="text-gray-300 text-sm mb-1">Ask Lucas anything.</p>
+          <p className="text-gray-400 text-xs">Lucas will get back to you in 24 hours or less.</p>
+          <p className="text-gray-500 text-xs mt-1">LucasGPT is answered manually by Lucas, not an AI.</p>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         {loading ? (
           <div className="text-center text-gray-400">Loading...</div>
@@ -108,13 +140,6 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
             {messages.map((message) => (
               <MessageBubble key={message._id} message={message} />
             ))}
-            {hasUnansweredMessage() && (
-              <div className="flex justify-start">
-                <div className="bg-gray-800 rounded-lg px-4 py-3 text-gray-400 text-sm">
-                  Lucas will get back to you in 24 hours or less...
-                </div>
-              </div>
-            )}
           </>
         )}
         <div ref={messagesEndRef} />
@@ -180,9 +205,11 @@ function ChatWindow({ conversationId, isGuest, user, onLogout }) {
             </button>
           </div>
           
-          <p className="text-xs text-gray-500 text-center mt-2">
-            LucasGPT is answered manually by Lucas, not an AI.
-          </p>
+          {hasUnansweredMessage() && (
+            <p className="text-xs text-gray-400 text-center mt-2">
+              Lucas will get back to you soon...
+            </p>
+          )}
         </div>
       </div>
     </div>

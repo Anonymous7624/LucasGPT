@@ -27,6 +27,10 @@ const conversationSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  closed_at: {
+    type: Date,
+    default: null
+  },
   created_at: {
     type: Date,
     default: Date.now

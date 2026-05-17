@@ -6,21 +6,33 @@ A full-stack web application where users can chat with Lucas, who responds manua
 
 ### User Features
 - **User Authentication**: Sign up and log in to save conversations
+- **Chat History Sidebar**: Registered users can view and switch between all their open and answered conversations
 - **Guest Mode**: Use the app without creating an account (conversations are temporary)
 - **File Uploads**: Attach PDFs and images to messages
+- **Instant File Preview**: Images display inline, PDFs with open/download buttons
+- **Secure File Access**: Blob-based file loading with proper authentication
 - **Modern Dark UI**: Clean, ChatGPT-inspired interface
 - **Persistent Conversations**: Registered users can return and see previous conversations
+- **Conversation Status Tracking**: See if your conversation is open or answered
+- **Follow-up Messages**: Send follow-up messages in answered conversations (auto-reopens them)
 - **Real-time Updates**: Message polling updates every 3 seconds
 - **Mobile Responsive**: Works on all devices
 
 ### Admin Features
 - **Secure JWT Authentication**: Admin login with MongoDB-backed accounts
 - **Dashboard**: View and manage all conversations
-- **File Management**: View, preview, and download user-uploaded files
+- **Status Filtering**: Filter conversations by Open, Answered, Closed, or All
+- **File Management**: View, preview, and download user-uploaded files with secure Blob loading
 - **Reply with Files**: Attach PDFs and images to replies
 - **Status Management**: Mark conversations as open, answered, or closed
+- **Conversation Lifecycle**: 
+  - **Open**: Active conversations requiring response
+  - **Answered**: Conversations with admin reply (user can still follow up)
+  - **Closed**: Hidden from users, archived for admin reference
+- **Delete Conversations**: Permanently delete conversations including all messages and files
 - **Guest Detection**: See which conversations are from guests vs registered users
 - **Auto-refresh**: Dashboard updates every 5 seconds
+- **Closed Conversation Handling**: Users automatically redirected when conversation is closed
 
 ### Guest Session Management
 - **Heartbeat System**: Guest sessions send heartbeat every 30 seconds
@@ -241,25 +253,26 @@ lucasgpt/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/conversations` | Create conversation (registered user) |
-| GET | `/api/conversations` | Get user's conversations (protected) |
+| GET | `/api/conversations` | Get user's open/answered conversations (protected) |
 | GET | `/api/conversations/:id/messages` | Get messages (owner/guest/admin) |
-| POST | `/api/conversations/:id/messages` | Send message with files |
+| POST | `/api/conversations/:id/messages` | Send message with files (optionalAuth) |
 
 ### File Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/files/:fileId/view` | View file (inline) |
-| GET | `/api/files/:fileId/download` | Download file |
+| GET | `/api/files/:fileId/view` | View file (inline, optionalAuth) |
+| GET | `/api/files/:fileId/download` | Download file (optionalAuth) |
 
 ### Admin Endpoints (Admin Only)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/admin/conversations` | Get all conversations |
+| GET | `/api/admin/conversations` | Get all conversations (supports ?status= filter) |
 | GET | `/api/admin/conversations/:id` | Get conversation details |
 | POST | `/api/admin/conversations/:id/reply` | Reply with files |
-| PATCH | `/api/admin/conversations/:id/status` | Update status |
+| PATCH | `/api/admin/conversations/:id/status` | Update status (open/answered/closed) |
+| DELETE | `/api/admin/conversations/:id` | Permanently delete conversation and files |
 
 ## Database Schema
 
@@ -285,6 +298,7 @@ lucasgpt/
   status: String (enum: 'open', 'answered', 'closed'),
   is_guest: Boolean,
   last_heartbeat_at: Date,
+  closed_at: Date (nullable),
   created_at: Date,
   updated_at: Date
 }
@@ -451,6 +465,49 @@ Files are stored in MongoDB GridFS for efficient streaming and retrieval.
 
 ## How It Works
 
+### Conversation Status Workflow
+The system uses three statuses to manage conversation lifecycle:
+
+1. **Open** (default):
+   - Visible to user in their chat sidebar
+   - User can send messages
+   - Admin sees in "Open" tab
+   - Status when user first creates conversation
+
+2. **Answered**:
+   - Set when admin replies to a message
+   - Still visible to user in their sidebar
+   - User can send follow-up messages
+   - Sending a follow-up automatically changes status back to "Open"
+   - Admin sees in "Answered" tab
+
+3. **Closed**:
+   - Set when admin clicks "Close" button
+   - **Hidden from user** - removed from their sidebar
+   - User cannot send messages
+   - For registered users: prompted to start new conversation
+   - For guests: session cleared, forced to create new guest session
+   - Admin can still view in "Closed" tab
+   - Closed conversations block file access for users/guests
+   - `closed_at` timestamp recorded
+
+**Delete** (permanent):
+- Admin-only action with confirmation
+- Permanently removes conversation, messages, file metadata, and GridFS files
+- Cannot be undone
+
+### File Access Security
+Files are protected with Blob-based authentication:
+- Frontend fetches files as Blobs with proper Authorization headers
+- Images: Blob converted to object URL for inline display
+- PDFs: Blob used for viewing/downloading
+- Access rules:
+  - Admin: Full access to all files
+  - Registered user: Access to files in their own open/answered conversations
+  - Guest: Access to files in current guest session
+  - Closed conversations: Admin-only file access
+- Object URLs properly revoked on component unmount
+
 ### Admin Account Initialization
 On backend startup, the server:
 1. Connects to MongoDB
@@ -499,6 +556,10 @@ On backend startup, the server:
 - File uploads validated by type and extension
 - Admin role required for dashboard access
 - Guest sessions isolated by session ID
+- **File access**: Blob-based authentication prevents unauthorized access
+- **Optional auth**: Endpoints support both JWT and guest session headers
+- **Closed conversations**: File access blocked for non-admin users
+- **Message authorization**: Checks user ownership, guest session, or admin role
 
 ## Troubleshooting
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const File = require('../models/File');
 const Conversation = require('../models/Conversation');
+const { optionalAuth } = require('../middleware/auth');
 const { getGridFSBucket } = require('../db');
 
 const router = express.Router();
@@ -18,11 +19,16 @@ async function checkFileAccess(fileId, req) {
     return { authorized: false, error: 'Conversation not found' };
   }
 
+  const isAdmin = req.user && req.user.role === 'admin';
+  
+  if (conversation.status === 'closed' && !isAdmin) {
+    return { authorized: false, error: 'Access denied - conversation is closed' };
+  }
+
   const guestSessionId = req.headers['x-guest-session-id'];
   const isGuest = conversation.is_guest && conversation.guest_session_id === guestSessionId;
   const isOwner = req.user && conversation.owner_user_id && 
                   conversation.owner_user_id.toString() === req.user._id.toString();
-  const isAdmin = req.user && req.user.role === 'admin';
 
   if (isGuest || isOwner || isAdmin) {
     return { authorized: true, file };
@@ -31,7 +37,7 @@ async function checkFileAccess(fileId, req) {
   return { authorized: false, error: 'Access denied' };
 }
 
-router.get('/:fileId/view', async (req, res) => {
+router.get('/:fileId/view', optionalAuth, async (req, res) => {
   try {
     const { fileId } = req.params;
     const access = await checkFileAccess(fileId, req);
@@ -64,7 +70,7 @@ router.get('/:fileId/view', async (req, res) => {
   }
 });
 
-router.get('/:fileId/download', async (req, res) => {
+router.get('/:fileId/download', optionalAuth, async (req, res) => {
   try {
     const { fileId } = req.params;
     const access = await checkFileAccess(fileId, req);

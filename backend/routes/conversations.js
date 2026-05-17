@@ -5,7 +5,7 @@ const path = require('path');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const File = require('../models/File');
-const { authenticateToken, validateConversationAccess } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, validateConversationAccess } = require('../middleware/auth');
 const { getGridFSBucket } = require('../db');
 const { Readable } = require('stream');
 
@@ -90,7 +90,8 @@ router.post('/', authenticateToken, async (req, res) => {
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const conversations = await Conversation.find({
-      owner_user_id: req.user._id
+      owner_user_id: req.user._id,
+      status: { $in: ['open', 'answered'] }
     }).sort({ updated_at: -1 });
 
     const conversationsWithMessages = await Promise.all(
@@ -133,7 +134,7 @@ router.get('/:conversationId/messages', validateConversationAccess, async (req, 
   }
 });
 
-router.post('/:conversationId/messages', publicMessageLimiter, upload.array('files', 20), async (req, res) => {
+router.post('/:conversationId/messages', optionalAuth, publicMessageLimiter, upload.array('files', 20), async (req, res) => {
   try {
     const { conversationId } = req.params;
     const { content } = req.body;
@@ -153,12 +154,35 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const guestSessionId = req.headers['x-guest-session-id'];
-    const isAuthorized = 
-      (conversation.is_guest && conversation.guest_session_id === guestSessionId) ||
-      (req.user && conversation.owner_user_id && conversation.owner_user_id.toString() === req.user._id.toString());
+    if (conversation.status === 'closed') {
+      return res.status(403).json({ error: 'This conversation is closed' });
+    }
 
-    if (!isAuthorized) {
+    const guestSessionId = req.headers['x-guest-session-id'];
+    const isOwner = req.user && conversation.owner_user_id && 
+                    conversation.owner_user_id.toString() === req.user._id.toString();
+    const isGuest = conversation.is_guest && conversation.guest_session_id === guestSessionId;
+    const isAdmin = req.user && req.user.role === 'admin';
+
+    console.log('Message access check:', {
+      conversationId,
+      userId: req.user?._id?.toString(),
+      guestSessionId,
+      conversationOwnerId: conversation.owner_user_id?.toString(),
+      conversationGuestSessionId: conversation.guest_session_id,
+      isOwner,
+      isGuest,
+      isAdmin
+    });
+
+    if (!isOwner && !isGuest && !isAdmin) {
+      console.log('Access denied:', {
+        conversationId,
+        userId: req.user?._id?.toString(),
+        guestSessionId,
+        conversationOwnerId: conversation.owner_user_id?.toString(),
+        conversationGuestSessionId: conversation.guest_session_id
+      });
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -173,6 +197,15 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
       }
     }
 
+    const message = new Message({
+      conversation_id: conversation._id,
+      sender: 'user',
+      content: content.trim(),
+      file_ids: []
+    });
+
+    await message.save();
+
     const fileIds = [];
     for (const file of files) {
       const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -181,6 +214,7 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
       const fileDoc = new File({
         gridfs_file_id: gridfsFileId,
         conversation_id: conversation._id,
+        message_id: message._id,
         original_name: sanitizedName,
         mime_type: file.mimetype,
         size_bytes: file.size,
@@ -191,16 +225,12 @@ router.post('/:conversationId/messages', publicMessageLimiter, upload.array('fil
       fileIds.push(fileDoc._id);
     }
 
-    const message = new Message({
-      conversation_id: conversation._id,
-      sender: 'user',
-      content: content.trim(),
-      file_ids: fileIds
-    });
-
+    message.file_ids = fileIds;
     await message.save();
 
-    conversation.status = 'open';
+    if (conversation.status === 'answered') {
+      conversation.status = 'open';
+    }
     conversation.updated_at = new Date();
     if (conversation.is_guest) {
       conversation.last_heartbeat_at = new Date();

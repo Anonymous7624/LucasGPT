@@ -9,6 +9,7 @@ function ChatPage() {
   const [isStarted, setIsStarted] = useState(false);
   const [user, setUser] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
+  const [conversations, setConversations] = useState([]);
   const heartbeatInterval = useRef(null);
 
   useEffect(() => {
@@ -19,7 +20,7 @@ function ChatPage() {
       const parsedUser = JSON.parse(userData);
       setUser(parsedUser);
       setIsGuest(false);
-      loadUserConversation();
+      loadUserConversations();
     } else {
       setIsGuest(true);
       loadGuestSession();
@@ -44,11 +45,13 @@ function ChatPage() {
     }
   }, [isGuest, conversationId]);
 
-  const loadUserConversation = async () => {
+  const loadUserConversations = async () => {
     try {
-      const { conversations } = await api.getUserConversations();
-      if (conversations.length > 0) {
-        setConversationId(conversations[0]._id);
+      const { conversations: convs } = await api.getUserConversations();
+      setConversations(convs);
+      
+      if (convs.length > 0) {
+        setConversationId(convs[0]._id);
         setIsStarted(true);
       }
     } catch (error) {
@@ -108,10 +111,37 @@ function ChatPage() {
   const handleStartUser = async () => {
     try {
       const { conversationId: newConvId } = await api.createConversation();
+      await loadUserConversations();
       setConversationId(newConvId);
       setIsStarted(true);
     } catch (error) {
       alert('Failed to create conversation: ' + error.message);
+    }
+  };
+
+  const handleNewChat = async () => {
+    if (isGuest) {
+      sessionStorage.removeItem('guestSessionId');
+      sessionStorage.removeItem('conversationId');
+      setConversationId(null);
+      setIsStarted(false);
+    } else {
+      await handleStartUser();
+    }
+  };
+
+  const handleConversationClosed = () => {
+    if (isGuest) {
+      sessionStorage.removeItem('guestSessionId');
+      sessionStorage.removeItem('conversationId');
+      setConversationId(null);
+      setIsStarted(false);
+      alert('This conversation has been closed. Starting a new session...');
+    } else {
+      alert('This conversation has been closed. Please start a new conversation.');
+      loadUserConversations();
+      setConversationId(null);
+      setIsStarted(false);
     }
   };
 
@@ -122,7 +152,13 @@ function ChatPage() {
     setIsGuest(true);
     setIsStarted(false);
     setConversationId(null);
+    setConversations([]);
     navigate('/login');
+  };
+
+  const handleSelectConversation = (convId) => {
+    setConversationId(convId);
+    setIsStarted(true);
   };
 
   if (!isStarted) {
@@ -147,8 +183,30 @@ function ChatPage() {
                 onClick={handleStartUser}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition-colors"
               >
-                Start Conversation
+                Start New Conversation
               </button>
+
+              {conversations.length > 0 && (
+                <div className="bg-gray-700 rounded-lg p-3">
+                  <p className="text-gray-300 text-sm mb-2">Or continue an existing chat:</p>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {conversations.map(conv => (
+                      <button
+                        key={conv._id}
+                        onClick={() => handleSelectConversation(conv._id)}
+                        className="w-full text-left px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm text-white transition-colors"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="truncate flex-1">
+                            {conv.last_message?.substring(0, 40) || 'New conversation'}...
+                          </span>
+                          <span className="text-xs text-gray-400 ml-2 capitalize">{conv.status}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={handleLogout}
@@ -192,12 +250,78 @@ function ChatPage() {
     );
   }
 
+  if (!isGuest && conversations.length > 1) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex">
+        <div className="w-80 bg-gray-800 border-r border-gray-700 flex flex-col">
+          <div className="p-4 border-b border-gray-700">
+            <h2 className="text-lg font-bold text-white mb-2">Your Chats</h2>
+            <button
+              onClick={handleNewChat}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm transition-colors"
+            >
+              + New Chat
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {conversations.map(conv => (
+              <button
+                key={conv._id}
+                onClick={() => handleSelectConversation(conv._id)}
+                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors ${
+                  conv._id === conversationId
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs capitalize font-medium">{conv.status}</span>
+                  <span className="text-xs opacity-70">
+                    {new Date(conv.updated_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="truncate">
+                  {conv.last_message?.substring(0, 50) || 'New conversation'}...
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="p-4 border-t border-gray-700">
+            <div className="text-center mb-2">
+              <p className="text-gray-400 text-xs">Logged in as</p>
+              <p className="text-white text-sm font-medium">{user?.username}</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg text-sm transition-colors"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1">
+          <ChatWindow
+            conversationId={conversationId}
+            isGuest={isGuest}
+            user={user}
+            onLogout={handleLogout}
+            onConversationClosed={handleConversationClosed}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ChatWindow
       conversationId={conversationId}
       isGuest={isGuest}
       user={user}
       onLogout={handleLogout}
+      onConversationClosed={handleConversationClosed}
     />
   );
 }

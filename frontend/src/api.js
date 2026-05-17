@@ -173,6 +173,42 @@ export const api = {
       body: JSON.stringify({ status }),
     });
   },
+
+  deleteConversation: async (conversationId) => {
+    return fetchAPI(`/api/admin/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  fetchFileBlob: async (fileId, mode = 'view') => {
+    const endpoint = mode === 'download' 
+      ? `/api/files/${fileId}/download` 
+      : `/api/files/${fileId}/view`;
+    
+    const url = `${API_BASE_URL}${endpoint}`;
+    
+    const config = {
+      headers: {}
+    };
+
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const guestSessionId = sessionStorage.getItem('guestSessionId');
+    if (guestSessionId && !token) {
+      config.headers['X-Guest-Session-Id'] = guestSessionId;
+    }
+
+    const response = await fetch(url, config);
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch file');
+    }
+
+    return await response.blob();
+  },
 };
 
 export default api;

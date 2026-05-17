@@ -25,6 +25,25 @@ async function authenticateToken(req, res, next) {
   }
 }
 
+async function optionalAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.userId).select('-password_hash');
+      if (user) {
+        req.user = user;
+      }
+    } catch (error) {
+      console.log('Optional auth: Invalid token provided');
+    }
+  }
+  
+  next();
+}
+
 function requireAdmin(req, res, next) {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -63,6 +82,7 @@ async function validateConversationAccess(req, res, next) {
 
 module.exports = {
   authenticateToken,
+  optionalAuth,
   requireAdmin,
   validateConversationAccess
 };

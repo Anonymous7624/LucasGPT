@@ -65,7 +65,14 @@ async function uploadFileToGridFS(fileBuffer, filename, mimetype) {
 
 router.get('/conversations', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const conversations = await Conversation.find()
+    const { status } = req.query;
+    
+    let filter = {};
+    if (status && ['open', 'answered', 'closed'].includes(status)) {
+      filter.status = status;
+    }
+
+    const conversations = await Conversation.find(filter)
       .populate('owner_user_id', 'username email')
       .sort({ updated_at: -1 });
 
@@ -212,12 +219,51 @@ router.patch('/conversations/:conversationId/status', authenticateToken, require
 
     conversation.status = status;
     conversation.updated_at = new Date();
+    
+    if (status === 'closed') {
+      conversation.closed_at = new Date();
+    }
+    
     await conversation.save();
 
     res.json({ success: true, status });
   } catch (error) {
     console.error('Error updating status:', error);
     res.status(500).json({ error: 'Failed to update status' });
+  }
+});
+
+router.delete('/conversations/:conversationId', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+
+    const conversation = await Conversation.findById(conversationId);
+    
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const files = await File.find({ conversation_id: conversationId });
+    
+    const gfsBucket = getGridFSBucket();
+    for (const file of files) {
+      try {
+        await gfsBucket.delete(file.gridfs_file_id);
+      } catch (error) {
+        console.error(`Error deleting GridFS file ${file.gridfs_file_id}:`, error);
+      }
+    }
+
+    await File.deleteMany({ conversation_id: conversationId });
+    
+    await Message.deleteMany({ conversation_id: conversationId });
+    
+    await Conversation.findByIdAndDelete(conversationId);
+
+    res.json({ success: true, message: 'Conversation and all associated data deleted' });
+  } catch (error) {
+    console.error('Error deleting conversation:', error);
+    res.status(500).json({ error: 'Failed to delete conversation' });
   }
 });
 

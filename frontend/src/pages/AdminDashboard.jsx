@@ -11,6 +11,7 @@ function AdminDashboard() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('open');
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
@@ -32,12 +33,22 @@ function AdminDashboard() {
     loadConversations();
     const interval = setInterval(loadConversations, 5000);
     return () => clearInterval(interval);
-  }, [navigate]);
+  }, [navigate, statusFilter]);
 
   const loadConversations = async () => {
     try {
+      const params = statusFilter === 'all' ? {} : { status: statusFilter };
+      const queryString = new URLSearchParams(params).toString();
+      const url = queryString ? `/api/admin/conversations?${queryString}` : '/api/admin/conversations';
+      
       const data = await api.getAdminConversations();
-      setConversations(data.conversations);
+      
+      let filtered = data.conversations;
+      if (statusFilter !== 'all') {
+        filtered = data.conversations.filter(c => c.status === statusFilter);
+      }
+      
+      setConversations(filtered);
     } catch (error) {
       if (error.message.includes('token') || error.message.includes('Admin')) {
         localStorage.removeItem('authToken');
@@ -101,10 +112,146 @@ function AdminDashboard() {
     }
   };
 
+  const handleDeleteConversation = async () => {
+    if (!selectedConversation) return;
+
+    if (!confirm(`Are you sure you want to permanently delete this conversation? This will delete all messages and files and cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await api.deleteConversation(selectedConversation._id);
+      setSelectedConversation(null);
+      setMessages([]);
+      await loadConversations();
+      alert('Conversation deleted successfully');
+    } catch (error) {
+      alert('Failed to delete conversation: ' + error.message);
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('authToken');
     localStorage.removeItem('user');
     navigate('/admin/login');
+  };
+
+  const ImageFile = ({ file }) => {
+    const [imageUrl, setImageUrl] = useState(null);
+    const [loadingImg, setLoadingImg] = useState(true);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+      let objectUrl = null;
+      
+      const loadImage = async () => {
+        try {
+          const blob = await api.fetchFileBlob(file._id, 'view');
+          objectUrl = URL.createObjectURL(blob);
+          setImageUrl(objectUrl);
+          setLoadingImg(false);
+        } catch (err) {
+          console.error('Error loading image:', err);
+          setError(true);
+          setLoadingImg(false);
+        }
+      };
+
+      loadImage();
+
+      return () => {
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+        }
+      };
+    }, [file._id]);
+
+    if (loadingImg) {
+      return <div className="text-xs opacity-70 mt-2">Loading...</div>;
+    }
+
+    if (error) {
+      return <div className="text-xs opacity-70 mt-2 text-red-400">Failed to load</div>;
+    }
+
+    return (
+      <div className="mt-2">
+        <img
+          src={imageUrl}
+          alt={file.original_name}
+          className="max-w-full max-h-64 rounded border border-gray-600 cursor-pointer"
+          onClick={async () => {
+            try {
+              const blob = await api.fetchFileBlob(file._id, 'view');
+              const url = URL.createObjectURL(blob);
+              window.open(url, '_blank');
+            } catch (err) {
+              console.error('Error opening image:', err);
+            }
+          }}
+        />
+        <p className="text-xs opacity-70 mt-1">{file.original_name}</p>
+      </div>
+    );
+  };
+
+  const PDFFile = ({ file }) => {
+    const handleView = async () => {
+      try {
+        const blob = await api.fetchFileBlob(file._id, 'view');
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (err) {
+        console.error('Error viewing PDF:', err);
+        alert('Failed to open PDF');
+      }
+    };
+
+    const handleDownload = async () => {
+      try {
+        const blob = await api.fetchFileBlob(file._id, 'download');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.original_name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Error downloading PDF:', err);
+        alert('Failed to download PDF');
+      }
+    };
+
+    return (
+      <div className="mt-2 p-3 bg-gray-700 rounded border border-gray-600">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">📄</span>
+            <div>
+              <p className="text-sm font-medium">{file.original_name}</p>
+              <p className="text-xs opacity-70">{(file.size_bytes / 1024).toFixed(1)} KB</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleView}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs"
+            >
+              Open
+            </button>
+            <button
+              onClick={handleDownload}
+              className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
+            >
+              Download
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderFile = (file) => {
@@ -112,50 +259,11 @@ function AdminDashboard() {
     const isPDF = file.mime_type === 'application/pdf';
 
     if (isImage) {
-      return (
-        <div key={file._id} className="mt-2">
-          <img
-            src={api.getFileViewUrl(file._id)}
-            alt={file.original_name}
-            className="max-w-full max-h-64 rounded border border-gray-600 cursor-pointer"
-            onClick={() => window.open(api.getFileViewUrl(file._id), '_blank')}
-          />
-          <p className="text-xs opacity-70 mt-1">{file.original_name}</p>
-        </div>
-      );
+      return <ImageFile key={file._id} file={file} />;
     }
 
     if (isPDF) {
-      return (
-        <div key={file._id} className="mt-2 p-3 bg-gray-700 rounded border border-gray-600">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">📄</span>
-              <div>
-                <p className="text-sm font-medium">{file.original_name}</p>
-                <p className="text-xs opacity-70">{(file.size_bytes / 1024).toFixed(1)} KB</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <a
-                href={api.getFileViewUrl(file._id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs"
-              >
-                View
-              </a>
-              <a
-                href={api.getFileDownloadUrl(file._id)}
-                download
-                className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
-              >
-                Download
-              </a>
-            </div>
-          </div>
-        </div>
-      );
+      return <PDFFile key={file._id} file={file} />;
     }
 
     return null;
@@ -177,6 +285,51 @@ function AdminDashboard() {
           <p className="text-sm text-gray-400">
             {conversations.length} conversation{conversations.length !== 1 ? 's' : ''}
           </p>
+        </div>
+
+        <div className="px-4 py-3 border-b border-gray-700">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setStatusFilter('open')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                statusFilter === 'open'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              Open
+            </button>
+            <button
+              onClick={() => setStatusFilter('answered')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                statusFilter === 'answered'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              Answered
+            </button>
+            <button
+              onClick={() => setStatusFilter('closed')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                statusFilter === 'closed'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              Closed
+            </button>
+            <button
+              onClick={() => setStatusFilter('all')}
+              className={`px-3 py-2 rounded text-sm transition-colors ${
+                statusFilter === 'all'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              All
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -216,14 +369,22 @@ function AdminDashboard() {
                 <button
                   onClick={() => handleUpdateStatus('answered')}
                   className="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-sm transition-colors text-white"
+                  disabled={selectedConversation.status === 'answered'}
                 >
                   Answered
                 </button>
                 <button
                   onClick={() => handleUpdateStatus('closed')}
-                  className="px-3 py-1 bg-gray-600 hover:bg-gray-700 rounded text-sm transition-colors text-white"
+                  className="px-3 py-1 bg-yellow-600 hover:bg-yellow-700 rounded text-sm transition-colors text-white"
+                  disabled={selectedConversation.status === 'closed'}
                 >
                   Close
+                </button>
+                <button
+                  onClick={handleDeleteConversation}
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm transition-colors text-white"
+                >
+                  Delete
                 </button>
               </div>
             </div>
