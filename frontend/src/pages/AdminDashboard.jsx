@@ -20,13 +20,13 @@ function AdminDashboard() {
     const userData = localStorage.getItem('user');
     
     if (!token || !userData) {
-      navigate('/admin/login');
+      navigate('/login');
       return;
     }
 
     const user = JSON.parse(userData);
     if (user.role !== 'admin') {
-      navigate('/admin/login');
+      navigate('/');
       return;
     }
 
@@ -37,10 +37,6 @@ function AdminDashboard() {
 
   const loadConversations = async () => {
     try {
-      const params = statusFilter === 'all' ? {} : { status: statusFilter };
-      const queryString = new URLSearchParams(params).toString();
-      const url = queryString ? `/api/admin/conversations?${queryString}` : '/api/admin/conversations';
-      
       const data = await api.getAdminConversations();
       
       let filtered = data.conversations;
@@ -50,10 +46,11 @@ function AdminDashboard() {
       
       setConversations(filtered);
     } catch (error) {
-      if (error.message.includes('token') || error.message.includes('Admin')) {
+      console.error('Failed to load conversations:', error);
+      if (error.message.includes('token') || error.message.includes('Admin') || error.message.includes('Unauthorized')) {
         localStorage.removeItem('authToken');
         localStorage.removeItem('user');
-        navigate('/admin/login');
+        navigate('/login');
       }
     } finally {
       setLoading(false);
@@ -131,9 +128,16 @@ function AdminDashboard() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('user');
-    navigate('/admin/login');
+    try {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      sessionStorage.removeItem('guestSessionId');
+      sessionStorage.removeItem('conversationId');
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      navigate('/admin/login');
+    }
   };
 
   const ImageFile = ({ file }) => {

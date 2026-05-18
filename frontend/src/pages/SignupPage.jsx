@@ -42,7 +42,11 @@ export default function SignupPage() {
       sessionStorage.removeItem('guestSessionId');
       sessionStorage.removeItem('conversationId');
 
-      navigate('/');
+      if (response.user.role === 'admin') {
+        navigate('/admin/dashboard');
+      } else {
+        navigate('/');
+      }
     } catch (err) {
       setError(err.message || 'Signup failed');
     } finally {

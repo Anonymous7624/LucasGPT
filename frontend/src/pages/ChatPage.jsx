@@ -18,6 +18,12 @@ function ChatPage() {
 
     if (authToken && userData) {
       const parsedUser = JSON.parse(userData);
+      
+      if (parsedUser.role === 'admin') {
+        navigate('/admin/dashboard');
+        return;
+      }
+      
       setUser(parsedUser);
       setIsGuest(false);
       loadUserConversations();
@@ -31,7 +37,7 @@ function ChatPage() {
         clearInterval(heartbeatInterval.current);
       }
     };
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     if (isGuest && conversationId) {
@@ -48,10 +54,11 @@ function ChatPage() {
   const loadUserConversations = async () => {
     try {
       const { conversations: convs } = await api.getUserConversations();
-      setConversations(convs);
+      const openConversations = convs.filter(c => c.status === 'open' || c.status === 'answered');
+      setConversations(openConversations);
       
-      if (convs.length > 0) {
-        setConversationId(convs[0]._id);
+      if (openConversations.length > 0) {
+        setConversationId(openConversations[0]._id);
         setIsStarted(true);
       }
     } catch (error) {
@@ -130,30 +137,35 @@ function ChatPage() {
     }
   };
 
-  const handleConversationClosed = () => {
+  const handleConversationClosed = async () => {
     if (isGuest) {
       sessionStorage.removeItem('guestSessionId');
       sessionStorage.removeItem('conversationId');
       setConversationId(null);
       setIsStarted(false);
-      alert('This conversation has been closed. Starting a new session...');
     } else {
-      alert('This conversation has been closed. Please start a new conversation.');
-      loadUserConversations();
       setConversationId(null);
       setIsStarted(false);
+      await loadUserConversations();
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('user');
-    setUser(null);
-    setIsGuest(true);
-    setIsStarted(false);
-    setConversationId(null);
-    setConversations([]);
-    navigate('/login');
+    try {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      sessionStorage.removeItem('guestSessionId');
+      sessionStorage.removeItem('conversationId');
+      setUser(null);
+      setIsGuest(true);
+      setIsStarted(false);
+      setConversationId(null);
+      setConversations([]);
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      navigate('/login');
+    }
   };
 
   const handleSelectConversation = (convId) => {

@@ -72,6 +72,10 @@ async function validateConversationAccess(req, res, next) {
       return res.status(403).json({ error: 'Access denied to this conversation' });
     }
 
+    if (conversation.status === 'closed' && !isAdmin) {
+      return res.status(410).json({ error: 'This conversation has been closed' });
+    }
+
     req.conversation = conversation;
     next();
   } catch (error) {

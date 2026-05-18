@@ -9,14 +9,23 @@ function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClo
   const [sending, setSending] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [conversation, setConversation] = useState(null);
+  const [closedBanner, setClosedBanner] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const pollingIntervalRef = useRef(null);
+  const closedHandledRef = useRef(false);
 
   useEffect(() => {
     if (conversationId) {
+      closedHandledRef.current = false;
+      setClosedBanner(null);
       loadMessages();
-      const interval = setInterval(loadMessages, 3000);
-      return () => clearInterval(interval);
+      pollingIntervalRef.current = setInterval(loadMessages, 3000);
+      return () => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+      };
     }
   }, [conversationId]);
 
@@ -30,16 +39,26 @@ function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClo
       setMessages(data.messages);
       setConversation(data.conversation);
       
-      if (data.conversation.status === 'closed') {
+      if (data.conversation.status === 'closed' && !closedHandledRef.current) {
+        closedHandledRef.current = true;
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+        setClosedBanner('This conversation has been closed. Please start a new conversation.');
         if (onConversationClosed) {
-          onConversationClosed();
+          setTimeout(() => onConversationClosed(), 2000);
         }
       }
     } catch (error) {
       console.error('Failed to load messages:', error);
-      if (error.message.includes('closed') || error.message.includes('Access denied')) {
+      if ((error.message.includes('closed') || error.message.includes('Access denied') || error.message.includes('403') || error.message.includes('410')) && !closedHandledRef.current) {
+        closedHandledRef.current = true;
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+        setClosedBanner('This conversation has been closed. Please start a new conversation.');
         if (onConversationClosed) {
-          onConversationClosed();
+          setTimeout(() => onConversationClosed(), 2000);
         }
       }
     } finally {
@@ -118,6 +137,20 @@ function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClo
         )}
       </header>
 
+      {closedBanner && (
+        <div className="bg-yellow-600 border-b border-yellow-700 px-4 py-3">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <p className="text-white text-sm">{closedBanner}</p>
+            <button
+              onClick={() => setClosedBanner(null)}
+              className="text-white hover:text-gray-200 font-bold"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
         <div className="max-w-4xl mx-auto">
           <p className="text-gray-300 text-sm mb-1">Ask Lucas anything.</p>
@@ -171,12 +204,14 @@ function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClo
               accept=".pdf,.jpg,.jpeg,.png,.webp,.gif"
               multiple
               className="hidden"
+              disabled={conversation?.status === 'closed'}
             />
             
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-4 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              className="px-4 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
               title="Attach files"
+              disabled={conversation?.status === 'closed'}
             >
               📎
             </button>
@@ -184,28 +219,28 @@ function ChatWindow({ conversationId, isGuest, user, onLogout, onConversationClo
             <textarea
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Send a message..."
+              placeholder={conversation?.status === 'closed' ? 'This conversation is closed' : 'Send a message...'}
               rows="1"
-              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32"
+              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-32 disabled:opacity-50 disabled:cursor-not-allowed"
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleSend();
                 }
               }}
-              disabled={sending}
+              disabled={sending || conversation?.status === 'closed'}
             />
             
             <button
               onClick={handleSend}
-              disabled={(!inputValue.trim() && selectedFiles.length === 0) || sending}
-              className="px-6 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded-lg transition-colors"
+              disabled={(!inputValue.trim() && selectedFiles.length === 0) || sending || conversation?.status === 'closed'}
+              className="px-6 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
             >
               {sending ? '...' : 'Send'}
             </button>
           </div>
           
-          {hasUnansweredMessage() && (
+          {hasUnansweredMessage() && conversation?.status !== 'closed' && (
             <p className="text-xs text-gray-400 text-center mt-2">
               Lucas will get back to you soon...
             </p>
